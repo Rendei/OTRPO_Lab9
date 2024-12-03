@@ -49,7 +49,7 @@
         public async Task RemoveUserAsync(string userId)
         {
             var db = _redis.GetDatabase();
-            await db.SetRemoveAsync(ONLINE_USERS_KEY, userId);
+            await db.HashDeleteAsync(ONLINE_USERS_KEY, userId);
         }
 
         // Получение списка онлайн-пользователей

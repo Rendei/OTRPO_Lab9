@@ -1,6 +1,7 @@
 ﻿using StackExchange.Redis;
 using System.Net.WebSockets;
 using System.Text;
+using System.Threading;
 
 namespace OTRPO_Lab9
 {
@@ -26,6 +27,7 @@ namespace OTRPO_Lab9
             var onlineUsers = await _chatService.GetOnlineUsersAsync();
             await _subscriber.PublishAsync(CHANNEL, $"ONLINE_USERS:{string.Join(",", onlineUsers.Values)}");
 
+            await SendMessageAsync(webSocket, $"ONLINE_USERS:{string.Join(",", onlineUsers.Values)}");
             // Отправляем историю сообщений
             var history = await _chatService.GetMessageHistoryAsync();
             foreach (var msg in history)
@@ -44,25 +46,53 @@ namespace OTRPO_Lab9
 
             // Обрабатываем входящие сообщения
             var buffer = new byte[1024 * 4];
-            try
+            var cancellationTokenSource = new CancellationTokenSource();
+
+            var receiveTask = Task.Run(async () =>
             {
-                while (webSocket.State == WebSocketState.Open)
+                try
                 {
-                    var result = await webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None);
-                    if (result.MessageType == WebSocketMessageType.Text)
+                    while (webSocket.State == WebSocketState.Open)
                     {
-                        var message = Encoding.UTF8.GetString(buffer, 0, result.Count);
-                        await _chatService.SaveMessageAsync(username, message);
-                        await _subscriber.PublishAsync(CHANNEL, $"{username}: {message}");
+                        var result = await webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None);
+                        if (result.MessageType == WebSocketMessageType.Text)
+                        {
+                            var message = Encoding.UTF8.GetString(buffer, 0, result.Count);
+                            await _chatService.SaveMessageAsync(username, message);
+                            await _subscriber.PublishAsync(CHANNEL, $"{username}: {message}");
+                        }
+                        else if (result.MessageType == WebSocketMessageType.Close)
+                        {
+                            break;
+                        }
                     }
                 }
-            }
-            finally
+                catch (WebSocketException wsExecption)
+                {
+                    Console.WriteLine($"An exception has happened with WebSocker {wsExecption.Message}");
+                }
+            });
+
+            var monitorTask = Task.Run(async () =>
             {
-                await _chatService.RemoveUserAsync(userId);
-                onlineUsers = await _chatService.GetOnlineUsersAsync();
-                await _subscriber.PublishAsync(CHANNEL, $"ONLINE_USERS:{string.Join(",", onlineUsers.Values)}");
-            }
+                while (!cancellationTokenSource.Token.IsCancellationRequested)
+                {
+                    if (webSocket.State != WebSocketState.Open)
+                    {
+                        cancellationTokenSource.Cancel(); // Останавливаем receiveTask
+                        break;
+                    }
+
+                    await Task.Delay(1000); // Проверяем состояние каждую секунду
+                }
+            });
+
+            await Task.WhenAny(receiveTask, monitorTask);
+
+            // Очистка ресурсов и уведомление
+            await _chatService.RemoveUserAsync(userId);
+            onlineUsers = await _chatService.GetOnlineUsersAsync();
+            await _subscriber.PublishAsync(CHANNEL, $"ONLINE_USERS:{string.Join(",", onlineUsers.Values)}");
         }
 
         private async Task SendMessageAsync(WebSocket socket, string message)
