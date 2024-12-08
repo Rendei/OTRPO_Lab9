@@ -20,7 +20,13 @@ namespace OTRPO_Lab9
         {
             const string CHANNEL = "chat";
             var userId = Guid.NewGuid().ToString();
-            var username = _chatService.GenerateUsername();
+            var username = context.Request.Query["username"].ToString();
+
+            if (string.IsNullOrWhiteSpace(username))
+            {
+                await context.Response.WriteAsync("Username is required.");
+                return;
+            }
 
             // Добавляем пользователя в онлайн и отправляем список
             await _chatService.AddUserAsync(userId, username);
@@ -100,6 +106,61 @@ namespace OTRPO_Lab9
             var buffer = Encoding.UTF8.GetBytes(message);
             await socket.SendAsync(new ArraySegment<byte>(buffer), WebSocketMessageType.Text, true, CancellationToken.None);
         }
+
+        public async Task HandlePrivateRoomAsync(HttpContext context, WebSocket webSocket, string roomId, string username)
+        {
+            const string ROOM_CHANNEL_PREFIX = "private_room:";
+            var channel = $"{ROOM_CHANNEL_PREFIX}{roomId}";
+
+            var room = await _chatService.GetPrivateRoomAsync(roomId);
+            if (room == null || !room.Participants.Contains(username))
+            {
+                await webSocket.CloseAsync(WebSocketCloseStatus.PolicyViolation, "Access denied", CancellationToken.None);
+                return;
+            }
+
+            var buffer = new byte[1024 * 4];
+
+            _ = Task.Run(() => _subscriber.SubscribeAsync(channel, async (_, message) =>
+            {
+                if (webSocket.State == WebSocketState.Open)
+                {
+                    await SendMessageAsync(webSocket, message);
+                }
+            }));
+
+            try
+            {
+                while (webSocket.State == WebSocketState.Open)
+                {
+                    var result = await webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None);
+                    if (result.MessageType == WebSocketMessageType.Text)
+                    {
+                        var message = Encoding.UTF8.GetString(buffer, 0, result.Count);
+                        var formattedMessage = $"room:{roomId}|{username}: {message}";
+
+                        await _subscriber.PublishAsync(channel, formattedMessage);
+                    }
+                }
+            }
+            finally
+            {
+                if (webSocket.State != WebSocketState.Open)
+                {
+                    // Убираем пользователя из участников комнаты
+                    room.Participants.Remove(username);
+                    await _chatService.SavePrivateRoomAsync(roomId, room);
+
+                    // Отправляем обновленный список участников всем в комнате
+                    var usersMessage = $"ONLINE_USERS:{string.Join(",", room.Participants)}";
+                    await _subscriber.PublishAsync(channel, usersMessage);
+
+                    // Закрываем соединение
+                    await webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Disconnected", CancellationToken.None);
+                }
+            }
+        }
+
     }
 
 }

@@ -68,6 +68,24 @@ public class Program
             }
         });
 
+        app.Map("/ws/private/{roomId}", async context =>
+        {
+            if (context.WebSockets.IsWebSocketRequest)
+            {
+                var chatHandler = context.RequestServices.GetRequiredService<ChatHandler>();
+                var webSocket = await context.WebSockets.AcceptWebSocketAsync();
+                var roomId = context.Request.RouteValues["roomId"]?.ToString();
+                var username = context.Request.Query["username"].ToString();
+                await chatHandler.HandlePrivateRoomAsync(context, webSocket, roomId, username);
+            }
+            else
+            {
+                context.Response.StatusCode = StatusCodes.Status400BadRequest;
+            }
+        });
+
+        app.MapControllers();
+
         app.UseRouting();
 
         app.UseAuthorization();

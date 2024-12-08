@@ -33,3 +33,17 @@ button {
     padding: 6px 10px;
     cursor: pointer;
 }
+
+#leave-room-button {
+    margin-top: 10px;
+    padding: 10px 20px;
+    background-color: #f44336;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+#leave-room-button:hover {
+    background-color: #d32f2f;
+}
